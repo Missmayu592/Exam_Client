@@ -1,29 +1,29 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  View, Text, FlatList, TouchableOpacity, PermissionsAndroid, 
-  Alert, Platform, Image, SafeAreaView 
-} from 'react-native';
-import RNFS from 'react-native-fs';
-import Video from 'react-native-video';
-import Sound from 'react-native-sound';
-import { Linking } from 'react-native';
+import React, { useState, useEffect } from "react";
+import { useNavigation } from '@react-navigation/native';
+
+import {
+  View, Text, FlatList, TouchableOpacity, Button, Alert, Platform, PermissionsAndroid, Linking
+} from "react-native";
+import RNFS from "react-native-fs";
+import FileViewer from "react-native-file-viewer";
 
 const PermissionScreen = () => {
+  const [permissionGranted, setPermissionGranted] = useState(false);
+  const [currentPath, setCurrentPath] = useState(RNFS.ExternalStorageDirectoryPath);
   const [files, setFiles] = useState([]);
-  const [selectedVideo, setSelectedVideo] = useState(null);
-  const [selectedAudio, setSelectedAudio] = useState(null);
-  const soundRef = useRef(null);
+  const navigation = useNavigation();
 
-  // Function to request permissions
-  const requestPermission = async () => {
-    if (Platform.OS === 'android') {
+
+  // Request storage permission
+  const requestStoragePermission = async () => {
+    if (Platform.OS === "android") {
       try {
         if (Platform.Version >= 33) {
-          // Android 13+ (API 33+)
           const result = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
             PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
             PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+
           ]);
 
           if (
@@ -31,177 +31,199 @@ const PermissionScreen = () => {
             result[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] === PermissionsAndroid.RESULTS.GRANTED &&
             result[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] === PermissionsAndroid.RESULTS.GRANTED
           ) {
-            return true;
+            setPermissionGranted(true);
+            loadFiles(currentPath);
           } else {
-            Alert.alert('Permission Denied', 'Please enable media access in settings.');
-            return false;
+            Alert.alert("Permission Denied", "Please enable media access in settings.");
           }
-        } else if (Platform.Version >= 30) {
-          // Android 11-12 (API 30-32)
+        }
+
+
+        else if (Platform.Version >= 30) {
           const result = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.MANAGE_EXTERNAL_STORAGE
           );
-
           if (result === PermissionsAndroid.RESULTS.GRANTED) {
-            return true;
+            setPermissionGranted(true);
+            loadFiles(currentPath);
           } else {
             Alert.alert(
               "Permission Needed",
               "Please grant 'All File Access' manually in settings.",
-              [{ text: "Open Settings", onPress: openAppSettings }, { text: "Cancel", style: "cancel" }]
+              [{ text: "Open Settings", onPress: () => Linking.openSettings() }, { text: "Cancel", style: "cancel" }]
             );
-            return false;
           }
         } else {
-          // Android 10 and below
           const result = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
             PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
           ]);
-
           if (result[PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE] === PermissionsAndroid.RESULTS.GRANTED) {
-            return true;
+            setPermissionGranted(true);
+            loadFiles(currentPath);
           } else {
-            Alert.alert('Permission Denied', 'Please allow storage access in settings.');
-            return false;
+            Alert.alert("Permission Denied", "Please allow storage access in settings.");
           }
         }
       } catch (err) {
-        console.warn('Permission request error:', err);
-        return false;
+        console.error("Permission request error:", err);
       }
     }
-    return false;
   };
 
-  // Open app settings
-  const openAppSettings = () => {
-    Linking.openSettings();
+  
+  // Function to load files and folders
+  const loadFiles = async (path) => {
+    try {
+      const fileList = await RNFS.readDir(path);
+  
+      const updatedFiles = fileList.map((file) => {
+        if (!file.isDirectory() && file.name.endsWith(".ans")) {
+          const baseName = file.name.replace(/\.ans$/, ""); // remove `.ans`
+          return {
+            ...file,
+            displayName: baseName + ".txt", // show `.txt` instead
+          };
+        }
+        return {
+          ...file,
+          displayName: file.name,
+        };
+      });
+  
+      setFiles(updatedFiles);
+      setCurrentPath(path);
+    } catch (error) {
+      console.error("Error reading files:", error);
+      Alert.alert("Error", "Failed to read storage contents.");
+    }
+  };
+  
+
+
+
+  const openFolder = (folder) => {
+    if (folder.isDirectory()) {
+      loadFiles(folder.path);
+    }
   };
 
-  // Function to fetch files from storage
-  const getFiles = async () => {
-    const hasPermission = await requestPermission();
-    if (!hasPermission) {
-      Alert.alert('Permission Denied', 'Cannot access storage without permission.');
+  const openFile = async (file) => {
+    if (!file || !file.path || !file.name) {
+      Alert.alert("Invalid File", "File information is incomplete.");
       return;
     }
-
-    // Use different storage paths to check
-    const possiblePaths = [
-      RNFS.ExternalStorageDirectoryPath,   // "/storage/emulated/0/"
-      RNFS.DownloadDirectoryPath,          // "/storage/emulated/0/Download"
-      RNFS.ExternalCachesDirectoryPath,    // App-specific external storage
-    ];
-
-    for (let path of possiblePaths) {
-      try {
-        console.log(`Checking path: ${path}`);
-       Alert.alert("Location", JSON.stringify(path));
-        const result = await RNFS.readDir(path);
-        console.log('Files found:', result);
-
-        const mediaFiles = result.filter(file => 
-          file.isFile() &&
-          (file.name.endsWith('.mp4') || file.name.endsWith('.mkv') ||
-           file.name.endsWith('.mp3') || file.name.endsWith('.wav') ||
-           file.name.endsWith('.jpg') || file.name.endsWith('.jpeg') || file.name.endsWith('.png') || file.name.endsWith('.avif') || file.name.endsWith('.pdf'))
-        );
-
-        if (mediaFiles.length > 0) {
-          setFiles(mediaFiles);
-          return;
-        }
-      } catch (error) {
-        console.error(`Error reading storage at ${path}:`, error);
+  
+    const filePath = file.path;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+  
+    try {
+      switch (extension) {
+        case "mp3":
+        case "aac":
+        case "wav":
+        case "ogg":
+        case "wma":
+        case "amr":
+        case "m4a":
+          navigation.navigate("AudioPlayer", { path: filePath });
+          break;
+  
+        case "mp4":
+        case "mkv":
+          navigation.navigate("VideoPlayer", { path: filePath });
+          break;
+  
+        case "jpg":
+        case "jpeg":
+        case "png":
+        case "avif":
+        case "gif":
+          navigation.navigate("ImageViewer", { path: filePath });
+          break;
+  
+        case "txt":
+        case "pdf":
+          navigation.navigate("DocumentViewer", { path: filePath });
+          break;
+  
+        case "ans":
+          const exists = await RNFS.exists(filePath);
+          if (!exists) {
+            Alert.alert("Error", "The .ans file does not exist.");
+            return;
+          }
+  
+          // ✅ Treat .ans file as readable text — NO COPY
+          navigation.navigate("DocumentViewer", { path: filePath });
+          break;
+  
+        default:
+          Alert.alert("Unsupported", "This file type is not supported in the app.");
       }
+    } catch (error) {
+      console.error("openFile error:", error);
+      Alert.alert("Error", `Failed to open file: ${error.message}`);
     }
-
-    Alert.alert('No Files Found', 'No media files found in accessible storage locations.');
   };
+  
+  
+  
+  
 
-  useEffect(() => {
-    requestPermission().then(granted => {
-      if (granted) {
-        getFiles();
-      }
-    });
-  }, []);
 
-  // Play Audio Function
-  const playAudio = (path) => {
-    if (soundRef.current) {
-      soundRef.current.stop();
-      soundRef.current.release();
+  //it is drectly open in default system application in phones
+
+  // const openFile = async (file) => {
+  //   try {
+  //     const filePath = file.path; // Already absolute
+  //     Alert.alert("Opening File : ", filePath)
+
+  //     await FileViewer.open(filePath, { showOpenWithDialog: true });
+
+  //   } catch (error) {
+  //     console.error("File open error:", error);
+  //     Alert.alert("Error", `Cannot open file: ${error.message}`);
+  //   }
+  // };
+
+  // Handle back navigation
+  const goBack = () => {
+    if (currentPath !== RNFS.ExternalStorageDirectoryPath) {
+      const parentPath = currentPath.substring(0, currentPath.lastIndexOf("/"));
+      loadFiles(parentPath);
     }
-
-    soundRef.current = new Sound(path, '', (error) => {
-      if (error) {
-        console.error('Error loading sound:', error);
-        return;
-      }
-      soundRef.current.play();
-    });
   };
 
   return (
-    <SafeAreaView style={{ flex: 1, padding: 20, backgroundColor: '#fff' }}>
-      <Text style={{ fontSize: 20, fontWeight: 'bold', marginBottom: 10 }}>Media Files:</Text>
+    <View style={{ flex: 1, padding: 10 }}>
+      <Text style={{ fontSize: 18, fontWeight: "bold", marginBottom: 10 }}>Current Path: {currentPath}</Text>
 
-      {files.length === 0 ? (
-        <Text style={{ textAlign: 'center', color: 'gray' }}>No media files found</Text>
+      {/* Back Button */}
+      {currentPath !== RNFS.ExternalStorageDirectoryPath && <Button title="Go Back" onPress={goBack} />}
+
+      {/* Request Permission Button */}
+      {!permissionGranted ? (
+        <Button title="Request Storage Permission" onPress={requestStoragePermission} />
       ) : (
+        //here you can open self player not by phones default as per format type like .mp3,.mp4,.jpg,.avif,.txt,.pdf,.
         <FlatList
           data={files}
           keyExtractor={(item) => item.path}
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={{
-                padding: 10,
-                marginVertical: 5,
-                backgroundColor: '#ddd',
-                borderRadius: 5,
-              }}
-              onPress={() => {
-                if (item.name.endsWith('.mp4') || item.name.endsWith('.mkv')) {
-                  setSelectedVideo(item.path);
-                  setSelectedAudio(null);
-                } else if (item.name.endsWith('.mp3') || item.name.endsWith('.wav')) {
-                  setSelectedAudio(item.path);
-                  playAudio(item.path);
-                }
-              }}
-            >
-              <Text>{item.name}</Text>
+            <TouchableOpacity onPress={() => (item.isDirectory() ? openFolder(item) : openFile(item))}>
+              <Text style={{ padding: 10, fontSize: 16, color: item.isDirectory() ? "blue" : "black" }}>
+                {item.isDirectory() ? "📂 " : "📄 "} {item.displayName}
+              </Text>
             </TouchableOpacity>
           )}
-          ListFooterComponent={() => (
-            <View>
-              {selectedVideo && (
-                <Video
-                  source={{ uri: `file://${selectedVideo}` }}
-                  style={{ width: '100%', height: 300, marginTop: 10 }}
-                  controls
-                />
-              )}
-
-              {files.map((file) =>
-                file.name.endsWith('.jpg') ||
-                file.name.endsWith('.jpeg') ||
-                file.name.endsWith('.png') ? (
-                  <Image
-                    key={file.path}
-                    source={{ uri: `file://${file.path}` }}
-                    style={{ width: 100, height: 100, marginTop: 10 }}
-                    resizeMode="cover"
-                  />
-                ) : null
-              )}
-            </View>
-          )}
+          onRefresh={() => loadFiles(currentPath)}
+          refreshing={false} // Optional: you can use useState to control spinner
         />
+
+
       )}
-    </SafeAreaView>
+    </View>
   );
 };
 
